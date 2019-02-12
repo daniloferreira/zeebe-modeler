@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/bpmn">
+    <comment>BPMN model</comment>
+    <acronym>BPMN</acronym>
+    <expanded-acronym>Business Process Model and Notation</expanded-acronym>
+    <glob pattern="*.bpmn"/>
+    <glob pattern="*.bpmn20.xml"/>
+    <sub-class-of type="application/xml"/>
+    <generic-icon name="application-xml"/>
+    <root-XML namespaceURI="http://www.omg.org/spec/BPMN/20100524/MODEL" localName="definitions"/>
+  </mime-type>
+</mime-info>

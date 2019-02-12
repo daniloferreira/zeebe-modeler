@@ -6,7 +6,14 @@ var electron = require('electron'),
 
 var path = require('path');
 
-var forEach = require('lodash/collection/forEach');
+var {
+  assign,
+  forEach
+} = require('min-dash');
+
+var fetch = require('node-fetch'),
+    fs = require('fs'),
+    FormData = require('form-data');
 
 /**
  * automatically report crash reports
@@ -24,7 +31,8 @@ var Platform = require('./platform'),
     Dialog = require('./dialog'),
     Menu = require('./menu'),
     Cli = require('./cli'),
-    PluginsManager = require('./plugin-manager');
+    Plugins = require('./plugins'),
+    Deployer = require('./deployer');
 
 var browserOpen = require('./util/browser-open'),
     renderer = require('./util/renderer');
@@ -36,7 +44,7 @@ Platform.create(process.platform, app, config);
 // variable for developing (reloading and devtools toggling)
 app.developmentMode = false;
 
-app.version = require('../../package').version;
+app.version = require('../package').version;
 app.name = 'Zeebe Modeler';
 
 // this is shared variable between main and renderer processes
@@ -45,33 +53,26 @@ global.metaData = {
   name: app.name
 };
 
-var pluginsManager = app.pluginsManager = new PluginsManager({
+// get directory of executable
+var appPath = path.dirname(app.getPath('exe'));
+
+app.plugins = new Plugins({
   paths: [
     app.getPath('userData'),
-    process.cwd()
+    appPath
   ]
 });
 
 // set global modeler directory
-global.modelerDirectory = process.cwd();
+global.modelerDirectory = appPath;
 
-// bootstrap the application's menus
-//
-// TODO(nikku): remove app.menu binding when development
-// mode bootstrap issue is fixed in electron-connect
-app.menu = new Menu(process.platform,
-  pluginsManager.getPlugins()
-    .map(p => {
-      return {
-        menu: p.menu,
-        name: p.name,
-        error: p.error
-      };
-    })
-  );
+var menu = new Menu(process.platform);
+
+// bootstrap filesystem
+var fileSystem = new FileSystem();
 
 // bootstrap workspace behavior
-new Workspace(config);
+new Workspace(config, fileSystem);
 
 // bootstrap client config behavior
 var clientConfig = new ClientConfig(app);
@@ -83,98 +84,129 @@ var dialog = new Dialog({
   userDesktopPath: app.getPath('userDesktop')
 });
 
-// bootstrap filesystem
-var fileSystem = new FileSystem({
-  dialog: dialog
-});
+
+// bootstrap deployer
+var deployer = new Deployer({ fetch, fs, FormData });
 
 
 // make app a singleton
 if (config.get('single-instance', true)) {
 
-  var shouldQuit = app.makeSingleInstance(function(commandLine, workingDirectory) {
+  const gotLock = app.requestSingleInstanceLock();
 
-    app.emit('app:parse-cmd', commandLine, workingDirectory);
+  if (gotLock) {
 
-    // focus existing running instance window
-    if (app.mainWindow) {
-      if (app.mainWindow.isMinimized()) {
-        app.mainWindow.restore();
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+
+      app.emit('app:parse-cmd', commandLine, workingDirectory);
+
+      // focus existing running instance window
+      if (app.mainWindow) {
+        if (app.mainWindow.isMinimized()) {
+          app.mainWindow.restore();
+        }
+
+        app.mainWindow.focus();
       }
-
-      app.mainWindow.focus();
-    }
-  });
-
-  if (shouldQuit) {
+    });
+  } else {
     app.quit();
   }
 }
 
-//////// client life-cycle /////////////////////////////
+// external //////////
 
-renderer.on('dialog:unrecognized-file', function(file, done) {
-  dialog.showDialog('unrecognizedFile', { name: file.name });
+renderer.on('external:open-url', function(options) {
+  var url = options.url;
 
-  done(null);
+  browserOpen(url);
 });
 
-renderer.on('dialog:reimport-warning', function(done) {
+// dialogs //////////
 
-  dialog.showDialog('reimportWarning', done);
+renderer.on('dialog:open-files', async function(options, done) {
+  const {
+    activeFile
+  } = options;
+
+  if (activeFile && activeFile.path) {
+    assign(options, {
+      defaultPath: path.dirname(activeFile.path)
+    });
+  }
+
+  const filePaths = await dialog.showOpenDialog(options);
+
+  done(null, filePaths);
 });
 
-renderer.on('dialog:convert-namespace', function(type, done) {
-  dialog.showDialog('namespace', { type: type }, done);
+renderer.on('dialog:open-file-error', async function(options, done) {
+  const response = await dialog.showOpenFileErrorDialog(options);
+
+  done(null, response);
 });
 
-renderer.on('dialog:import-error', function(filename, errorDetails, done) {
+renderer.on('dialog:save-file', async function(options, done) {
+  const { file } = options;
 
-  dialog.showDialog('importError', { name: filename, errorDetails: errorDetails }, function(err, answer) {
-    if (answer === 'ask-forum') {
-      browserOpen('https://forum.camunda.org/c/modeler');
-    }
+  if (file.path) {
+    assign(options, {
+      defaultPath: path.dirname(file.path)
+    });
+  }
 
-    // the answer is irrelevant for the client
-    done(null);
-  });
+  const filePath = await dialog.showSaveDialog(options);
+
+  done(null, filePath);
 });
 
-renderer.on('dialog:close-tab', function(diagramFile, done) {
-  dialog.showDialog('close', { name: diagramFile.name }, done);
+renderer.on('dialog:show', async function(options, done) {
+  const response = await dialog.showDialog(options, done);
+
+  done(null, response);
 });
 
-renderer.on('dialog:saving-denied', function(done) {
-  dialog.showDialog('savingDenied', done);
+// deploying //////////
+// TODO: remove and add as plugin instead
+
+renderer.on('deploy', handleDeployment);
+
+// filesystem //////////
+
+renderer.on('file:read', function(filePath, options = {}, done) {
+  try {
+    const newFile = fileSystem.readFile(filePath, options);
+
+    done(null, newFile);
+  } catch (err) {
+    done(err);
+  }
 });
 
-renderer.on('dialog:content-changed', function(done) {
-  dialog.showDialog('contentChanged', done);
+renderer.on('file:read-stats', function(file, done) {
+  const newFile = fileSystem.readFileStats(file);
+
+  done(null, newFile);
 });
 
+renderer.on('file:write', async function(filePath, file, options = {}, done) {
+  try {
+    const newFile = fileSystem.writeFile(filePath, file, options);
 
-function saveCallback(saveAction, diagramFile, done) {
-  saveAction.apply(fileSystem, [ diagramFile, (err, updatedDiagram) => {
-    if (err) {
-      return done(err);
-    }
+    done(null, newFile);
+  } catch (err) {
+    done(err);
+  }
+});
 
-    if (updatedDiagram && updatedDiagram !== 'cancel') {
-      app.emit('app:add-recent-file', updatedDiagram.path);
-    }
+// client config //////////
 
-    done(null, updatedDiagram);
-  }]);
-}
-
-renderer.on('client-config:get', function() {
-
-  var args = Array.prototype.slice.call(arguments);
+renderer.on('client-config:get', function(...args) {
 
   var done = args[args.length - 1];
 
   try {
-    clientConfig.get.apply(clientConfig, arguments);
+    clientConfig.get(...args);
   } catch (e) {
     if (typeof done === 'function') {
       done(e);
@@ -182,40 +214,7 @@ renderer.on('client-config:get', function() {
   }
 });
 
-renderer.on('file:save-as', function(diagramFile, done) {
-  saveCallback(fileSystem.saveAs, diagramFile, done);
-});
-
-renderer.on('file:save', function(diagramFile, done) {
-  saveCallback(fileSystem.save, diagramFile, done);
-});
-
-renderer.on('file:read', function(diagramFile, done) {
-  done(null, fileSystem.readFile(diagramFile.path));
-});
-
-renderer.on('file:read-stats', function(diagramFile, done) {
-  done(null, fileSystem.readFileStats(diagramFile));
-});
-
-renderer.on('file:open', function(filePath, done) {
-  fileSystem.open(filePath, function(err, diagramFiles) {
-    if (err) {
-      return done(err);
-    }
-
-    if (diagramFiles && diagramFiles !== 'cancel') {
-      diagramFiles.forEach(file => {
-        app.emit('app:add-recent-file', file.path);
-      });
-    }
-
-    done(null, diagramFiles);
-  });
-});
-
-
-//////// open file handling //////////////////////////////
+// open file handling //////////
 
 // list of files that should be opened by the editor
 app.openFiles = [];
@@ -223,6 +222,7 @@ app.openFiles = [];
 app.on('app:parse-cmd', function(argv, cwd) {
   console.log('app:parse-cmd', argv.join(' '), cwd);
 
+  // will result in opening dev.js as file
   var files = Cli.extractFiles(argv, cwd);
 
   files.forEach(function(file) {
@@ -236,6 +236,7 @@ app.on('app:open-file', function(filePath) {
   console.log('app:open-file', filePath);
 
   if (!app.clientReady) {
+
     // defer file open
     return app.openFiles.push(filePath);
   }
@@ -243,7 +244,9 @@ app.on('app:open-file', function(filePath) {
   try {
     file = fileSystem.readFile(filePath);
   } catch (e) {
-    return dialog.showDialog('unrecognizedFile', { name: path.basename(filePath) });
+    dialog.showOpenFileErrorDialog({
+      name: path.basename(filePath)
+    });
   }
 
   // open file immediately
@@ -259,11 +262,15 @@ app.on('app:client-ready', function() {
     try {
       files.push(fileSystem.readFile(filePath));
     } catch (e) {
-      dialog.showDialog('unrecognizedFile', { name: path.basename(filePath) });
+      dialog.showOpenFileErrorDialog({
+        name: path.basename(filePath)
+      });
     }
   });
 
-  renderer.send('client:open-files', files);
+  // renderer.send('client:open-files', files);
+
+  renderer.send('client:started');
 });
 
 renderer.on('client:ready', function() {
@@ -272,6 +279,31 @@ renderer.on('client:ready', function() {
   app.emit('app:client-ready');
 });
 
+app.on('web-contents-created', (event, webContents) => {
+
+  // open all external links in new window
+  webContents.on('new-window', function(event, url) {
+    event.preventDefault();
+
+    browserOpen(url);
+  });
+
+  // disable web-view (not used)
+  webContents.on('will-attach-webview', () => {
+    event.preventDefault();
+  });
+
+  // open in-page links externally by default
+  // @see https://github.com/electron/electron/issues/1344#issuecomment-171516636
+  webContents.on('will-navigate', (event, url) => {
+
+    if (url !== webContents.getURL()) {
+      event.preventDefault();
+
+      browserOpen(url);
+    }
+  });
+});
 
 /**
  * Create the main window that represents the editor.
@@ -280,20 +312,29 @@ renderer.on('client:ready', function() {
  */
 app.createEditorWindow = function() {
 
-  var mainWindow = app.mainWindow = new BrowserWindow({
+  var windowOptions = {
     resizable: true,
+    show: false,
     title: 'Zeebe Modeler'
-  });
+  };
 
-  mainWindow.maximize();
+  if (process.platform === 'linux') {
+    windowOptions.icon = path.join(__dirname + '/../resources/favicon.png');
+  }
 
-  mainWindow.loadURL('file://' + path.resolve(__dirname + '/../../public/index.html'));
+  var mainWindow = app.mainWindow = new BrowserWindow(windowOptions);
 
-  mainWindow.webContents.on('new-window', function(event, url) {
-    event.preventDefault();
+  dialog.setActiveWindow(mainWindow);
 
-    browserOpen(url);
-  });
+  menu.init();
+
+  var url = 'file://' + path.resolve(__dirname + '/../public/index.html');
+
+  if (app.developmentMode) {
+    url = 'http://localhost:3000';
+  }
+
+  mainWindow.loadURL(url);
 
   // handling case when user clicks on window close button
   mainWindow.on('close', function(e) {
@@ -302,6 +343,8 @@ app.createEditorWindow = function() {
     if (app.quitAllowed) {
       // dereferencing main window and resetting client state
       app.mainWindow = null;
+      dialog.setActiveWindow(null);
+
       app.clientReady = false;
 
       return console.log('Main window closed');
@@ -320,6 +363,14 @@ app.createEditorWindow = function() {
   mainWindow.on('focus', function() {
     console.log('Window focused');
     renderer.send('client:window-focused');
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
+
+  mainWindow.webContents.on('dom-ready', function() {
+    mainWindow.maximize();
   });
 
   app.emit('app:window-created', mainWindow);
@@ -356,6 +407,21 @@ app.on('ready', function() {
   app.emit('app:parse-cmd', process.argv, process.cwd());
 });
 
+
+function handleDeployment(data, done) {
+  const { endpointUrl } = data;
+
+  deployer.deploy(endpointUrl, data, function(error, result) {
+
+    if (error) {
+      console.error('failed to deploy', error);
+
+      return done(error);
+    }
+
+    done(null, result);
+  });
+}
 
 // expose app
 module.exports = app;

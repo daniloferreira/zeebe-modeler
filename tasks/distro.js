@@ -1,266 +1,119 @@
-'use strict';
+#!/usr/bin/env node
 
-var fs = require('fs');
-var which = require('which');
-var packager = require('electron-packager');
-var cpr = require('ncp');
-var archiver = require('archiver');
-var concat = require('concat-stream');
+const argv = require('yargs').argv;
 
-var path = require('path');
+const exec = require('execa').sync;
 
-var PACKAGE_JSON = require('../package.json');
+const getVersion = require('../app/util/get-version');
 
-var getAppVersion = require('../app/util/get-version'),
-    patchPkgVersion = require('../app/util/patch-pkg-version');
+const pkg = require('../app/package');
 
+const {
+  nightly,
+  publish,
+  config
+} = argv;
 
-module.exports = function(grunt) {
+// in case of --nightly, update all package versions to the
+// next minor version with the nightly preid. This will
+// result in app and client being versioned like `v1.2.3-nightly.0`.
 
-  grunt.registerMultiTask('distro', function(target) {
+const nightlyVersion = nightly && getVersion(pkg, {
+  nightly: 'nightly'
+});
 
-    var nightly = grunt.option('nightly');
+if (nightlyVersion) {
 
-    var buildVersion = grunt.option('build') || '0000';
+  const publishNightlyArgs = [
+    'version',
+    `${nightlyVersion}`,
+    '--no-git-tag-version',
+    '--no-push',
+    '--yes'
+  ];
 
-    var appVersion = grunt.option('app-version') || getAppVersion(PACKAGE_JSON, {
-      nightly: nightly ? 'nightly' : false
-    });
+  console.log(`
+Bumping ${pkg.name} version to ${nightlyVersion}
 
-    // monkey patch version in package.json
-    patchPkgVersion(appVersion);
+---
 
-    var platform = this.data.platform;
+lerna ${ publishNightlyArgs.join(' ') }
 
-    var __done = this.async();
-    var done = function(err) {
-      // restore old version in package.json
-      patchPkgVersion(PACKAGE_JSON.version);
+---
+`);
 
-      __done(err);
-    };
-
-    grunt.log.writeln(
-      'Assembling distribution(s) for ' + platform + ' ' +
-      '{ version: ' + appVersion + ', build: ' + buildVersion + ' }');
-
-    var iconPath = path.join(__dirname, '../resources/icons/icon_128'),
-        dirPath = path.join(__dirname, '..'),
-        outPath = path.join(__dirname, '../distro');
-
-    var options = {
-      name: PACKAGE_JSON.name,
-      dir: dirPath,
-      out: outPath,
-      platform: platform,
-      arch: [ 'ia32', 'x64' ],
-      overwrite: true,
-      prune: true,
-      asar: true,
-      icon: iconPath,
-      ignore: buildDistroIgnore(),
-      appVersion: appVersion,
-      appCopyright: 'camunda Services GmbH, 2015-2017',
-      buildVersion: buildVersion
-    };
-
-    if (platform === 'darwin') {
-      options.name = 'Zeebe Modeler';
-    }
-
-    if (platform === 'win32') {
-      options['win32metadata'] = {
-        CompanyName: 'camunda Services GmbH',
-        FileDescription: 'Zeebe Modeler',
-        OriginalFilename: 'zebee-modeler.exe',
-        ProductName: 'Zeebe Modeler',
-        InternalName: 'zeebe-modeler'
-      };
-
-      // make sure wine is available on linux systems
-      // if we are building the windows distribution
-      if (process.platform !== 'win32' && platform === 'win32') {
-        try {
-          which.sync('wine');
-        } catch (e) {
-          grunt.log.writeln('Skipping Windows packaging: wine is not found'['red']);
-          return done();
-        }
-      }
-    }
-
-
-    packager(options, function(err, paths) {
-
-      if (err) {
-        return done(err);
-      }
-
-      var replacements = {
-        appVersion: appVersion,
-        buildVersion: buildVersion
-      };
-
-      return amendAndArchive(platform, paths, replacements, done);
-    });
+  exec('lerna', publishNightlyArgs, {
+    stdio: 'inherit'
   });
-};
-
-
-/**
- * Return function that acts as a replacer for the given
- * template variables for a ncp transform stream.
- *
- * Variables are passed as objects, replacement patterns
- * have to look like `<%= varName %>`. If not found,
- * replacements default to empty string.
- *
- * @param {Object} replacements
- *
- * @return {Function}
- */
-function createReplacer(replacements) {
-
-  return function replacePlaceholders(read, write, file) {
-
-    if (!/(version|Info\.plist)$/.test(file.name)) {
-      return read.pipe(write);
-    }
-
-    read.pipe(concat(function(body) {
-
-      var bodyStr = body.toString('utf-8');
-      var replacedBodyStr = bodyStr.replace(/<%= ([^\s]+) %>/g, function(_, name) {
-        return replacements[name] || '';
-      });
-
-      write.end(replacedBodyStr);
-    }));
-  };
 }
 
+// ensure nightly releases are named ${appName}-nightly-${...}
+// this allows expert users to always fetch the nightly artifacts
+// from the same url
 
-function createArchive(platform, path, done) {
+const replaceVersion = nightly
+  ? s => s.replace('${version}', 'nightly')
+  : s => s;
 
-  var archive,
-      dest = path,
-      output;
+const artifactOptions = [
+  '-c.artifactName=${name}-${version}-${os}-${arch}.${ext}',
+  '-c.dmg.artifactName=${name}-${version}-${os}.${ext}',
+  '-c.nsis.artifactName=${name}-${version}-${os}-setup.${ext}',
+  '-c.nsisWeb.artifactName=${name}-${version}-${os}-web-setup.${ext}',
+  argv.compress === false && '-c.compression=store'
+].filter(f => f).map(replaceVersion);
 
-  if (platform === 'win32') {
-    archive = archiver('zip', {});
-    dest += '.zip';
-  } else {
-    if (platform === 'darwin') {
-      dest = dest.replace(/Zeebe Modeler/, 'zeebe-modeler');
-    }
+// interpret shorthand target options
+// --win, --linux, --mac
+const platforms = [
+  argv.win ? 'win' : null,
+  argv.linux ? 'linux': null,
+  argv.mac ? 'mac' : null
+].filter(f => f);
 
-    dest += '.tar.gz';
-    archive = archiver('tar', { gzip: true });
-  }
+const platformOptions = platforms.map(p => `--${p}`);
 
-  output = fs.createWriteStream(dest);
+const publishOptions = typeof publish !== undefined ? [
+  `--publish=${ publish ? 'always' : 'never' }`,
+  publish && nightly && '-c.publish.provider=s3',
+  publish && nightly && '-c.publish.bucket=zeebe-modeler-nightly'
+].filter(f => f) : [];
 
-  archive.pipe(output);
-  archive.on('end', done);
-  archive.on('error', done);
+const signingOptions = [
+  `-c.forceCodeSigning=${false}`
+];
 
-  archive.directory(path, 'zeebe-modeler').finalize();
+if (publish && (argv.ia32 || argv.x64)) {
+  console.error('Do not override arch; is manually pinned');
+  process.exit(1);
 }
 
+const archOptions = [ 'x64', 'ia32' ].filter(a => argv[a]).map(a => `--${a}`);
 
-function amendAndArchive(platform, distroPaths, replacements, done) {
+const args = [
+  ...[ config && `-c=${config}` ].filter(f => f),
+  ...archOptions,
+  ...signingOptions,
+  ...platformOptions,
+  ...publishOptions,
+  ...artifactOptions
+];
 
-  var replaceTemplates = createReplacer(replacements);
+console.log(`
+Building ${pkg.name} distro
 
-  var additionalAssets = [
-    __dirname + '/../resources/platform/base',
-    __dirname + '/../resources/platform/' + platform
-  ];
+---
 
-  function createDistro(distroPath, done) {
+  version: ${nightlyVersion || pkg.version}
+  platforms: [${ platforms.length && platforms || 'current' }]
+  publish: ${publish || false}
 
-    function copyAssets(assetDirectory, done) {
+---
 
-      if (fs.existsSync(assetDirectory)) {
-        cpr(assetDirectory, distroPath, { transform: replaceTemplates }, done);
-      } else {
-        done();
-      }
-    }
+electron-builder ${ args.join(' ') }
+`
+);
 
-    function archive(err) {
-      if (err) {
-        return done(err);
-      }
-
-      createArchive(platform, distroPath, done);
-    }
-
-    asyncMap(additionalAssets, copyAssets, archive);
-  }
-
-  asyncMap(distroPaths, createDistro, done);
-}
-
-
-/**
- * Async map a collection through a given iterator
- * and pass (err, mapping results) to the given done function.
- *
- * @param {Array<Object>} collection
- * @param {Function} iterator
- * @param {Function} done
- */
-function asyncMap(collection, iterator, done) {
-
-  var idx = -1;
-
-  var results = [];
-
-  function next() {
-    idx++;
-
-    if (idx === collection.length) {
-      return done(null, results);
-    }
-
-    iterator(collection[idx], function(err, result) {
-
-      if (err) {
-        return done(err);
-      }
-
-      results.push(result);
-
-      next();
-    });
-  }
-
-  next();
-}
-
-
-function buildDistroIgnore() {
-
-  var ignore = [
-    'app/develop',
-    'app/test',
-    'app/util',
-    'client',
-    'distro',
-    'docs',
-    'resources',
-    'tasks',
-    '.babelrc',
-    '.editorconfig',
-    '.eslintrc',
-    '.gitignore',
-    '.travis.yml',
-    '.wiredeps',
-    'Gruntfile.js',
-    'npm-shrinkwrap.json',
-    'README.md'
-  ];
-
-  return new RegExp('^/(' + ignore.join('|') + ')');
-}
+exec('electron-builder', args, {
+  stdio: 'inherit'
+});

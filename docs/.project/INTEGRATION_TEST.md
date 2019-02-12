@@ -48,10 +48,12 @@ Based on the [test diagram](./test.bpmn.png):
 * [ ] Add Form configuration (FormField + FormData) to "Inspect Invoice" UserTask
     * [ ] Copy / Paste task; properties are kept
     * [ ] Change task to ServiceTask; properties are gone from XML
-* [ ] Add Properties, Input/Output Mapping, `asyncBefore` and implementation to "Check" ServiceTask
+    * [ ] Undo last step `CTRL + Z`; properties are back
+    * [ ] Redo last step `CTRL + Y`; Task changed to Service Task without form properties
+* [ ] Add Properties, Input/Output Mapping, `asyncBefore`, Retry Time Cycle and implementation to "Check" ServiceTask
     * [ ] Copy / Paste task; properties are kept
-    * [ ] Change task to BusinessRuleTask; properties are kept
-    * [ ] Change task to UserTask; implementation property is gone from XML
+    * [ ] Change task to Send Task; properties are kept
+    * [ ] Change task to UserTask; implementation property is gone from XML (except Retry Time Cycle and `asyncBefore`)
 
 
 ####  CMMN modeling
@@ -69,7 +71,7 @@ Based on the [test diagram](./test.bpmn.png):
 * [ ] morph `Go on Holidays` to a decision table
 * [ ] morph `Which Season` to a decision table
 * [ ] moprh `Which Region` to a literal expression
-* [ ] double click onto green overlay on `Go on Holidays` jumps into table editing mode
+* [ ] click onto green overlay on `Go on Holidays` jumps into table editing mode
 * [ ] changing name reflects in DRD
 * [ ] save file on disk as `test.dmn` from table editing mode
 * [ ] save file on disk as `test2.dmn` from diagram mode
@@ -90,6 +92,11 @@ Based on the [test diagram](./test.bpmn.png):
     * [ ] `.bpmn`
     * [ ] `.cmmn`
     * [ ] `.dmn`
+
+
+#### Error Handling
+
+* [ ] Open [`broken.bpmn`](./broken.bpmn) and verify a proper error message is shown (_No diagram to display_)
 
 
 #### Other (platform specific)

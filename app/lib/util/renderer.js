@@ -4,15 +4,21 @@ var electron = require('electron'),
     ipcMain = electron.ipcMain,
     app = electron.app;
 
+const {
+  assign,
+  pick
+} = require('min-dash');
+
 
 function on(event, callback, that) {
-  ipcMain.on(event, function(evt, id) {
-    var args = Array.prototype.slice.call(arguments).slice(2);
 
-    function done() {
-      var args =  Array.prototype.slice.call(arguments).map(function(e) {
+  ipcMain.on(event, function(evt, id, args) {
+
+    function done(...doneArgs) {
+      var actualArgs = doneArgs.map(function(e) {
+        // error.message and error.code are not enumerable
         if (e instanceof Error) {
-          return { message: e.message };
+          return assign({}, pick(e, [ 'message', 'code' ]), e);
         }
 
         return e;
@@ -20,10 +26,10 @@ function on(event, callback, that) {
 
       var responseEvent = event + ':response:' + id;
 
-      evt.sender.send(responseEvent, args);
+      evt.sender.send(responseEvent, actualArgs);
     }
 
-    callback.apply(that || null, args.concat(done));
+    callback.apply(that || null, [ ...args, done ]);
   });
 }
 

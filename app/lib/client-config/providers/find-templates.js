@@ -4,7 +4,9 @@ var fs = require('fs');
 
 var glob = require('glob');
 
-var isArray = require('lodash/lang/isArray');
+var {
+  isArray
+} = require('min-dash');
 
 
 /**
@@ -52,7 +54,7 @@ module.exports = function findTemplates(searchPaths) {
 
 
 
-//////////// helpers ///////////////////////////////////////////
+// helpers //////////////////
 
 /**
  * Locate element templates in 'element-templates'

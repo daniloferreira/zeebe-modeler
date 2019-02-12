@@ -1,0 +1,31 @@
+{
+  "plugins": [
+    "syntax-dynamic-import",
+    "transform-object-assign",
+    "transform-object-rest-spread",
+    "transform-class-properties"
+  ],
+  "presets": [
+    [
+      "env", {
+        "modules": false,
+        "targets": {
+          "chrome": "62"
+        }
+      }
+    ],
+    "react"
+  ],
+  "env": {
+    "coverage": {
+      "plugins": [
+        [ "istanbul", {
+          "exclude": [
+            "**/__tests__/**",
+            "**/test/**"
+          ]
+        } ]
+      ]
+    }
+  }
+}

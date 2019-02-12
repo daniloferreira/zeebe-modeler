@@ -1,11 +1,7 @@
 # Docs
 
-Developer documentation for the Camunda Modeler.
+Developer documentation for the Zeebe Modeler.
 
-
-### [Element Templates](./element-templates)
-
-This shows how to setup and contribute pre-defined custom elements to the modeler
 
 ### [Plugins](./plugins)
 

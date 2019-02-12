@@ -24,7 +24,11 @@
           "name": "sender"
         },
         "constraints": {
-          "notEmpty": true
+          "notEmpty": true,
+          "pattern": {
+            "value": "^[A-z0-9._%+-]+@[A-z0-9.-]+\\.[A-z]{2,}$",
+            "message": "Must be a valid email."
+          }
         }
       },
       {
@@ -40,7 +44,7 @@
       },
       {
         "label": "Template",
-        "description": "By the way, you can use freemarker templates ${...} here",
+        "description": "By the way, you can use <a href=\"https://freemarker.apache.org/\">freemarker templates</a> here",
         "value": "Hello ${firstName}!",
         "type": "Text",
         "binding": {
@@ -72,6 +76,57 @@
         }
       }
     ]
+  },
+  {
+    "name": "ConnectorGetTask",
+    "id": "my.connector.http.get.Task",
+    "appliesTo": [
+      "bpmn:Task"
+    ],
+    "properties": [],
+    "scopes": {
+      "camunda:Connector": {
+        "properties": [
+          {
+            "label": "ConnectorId",
+            "type": "String",
+            "value": "My Connector HTTP - GET",
+            "binding": {
+              "type": "property",
+              "name": "connectorId"
+            }
+          },
+          {
+            "label": "Method",
+            "type": "String",
+            "value": "GET",
+            "binding": {
+              "type": "camunda:inputParameter",
+              "name": "method"
+            }
+          },
+          {
+            "label": "URL",
+            "type": "String",
+            "value": "https://bpmn.io",
+            "binding": {
+              "type": "camunda:inputParameter",
+              "name": "url"
+            }
+          },
+          {
+            "label": "Response",
+            "type": "String",
+            "value": "wsResponse",
+            "binding": {
+              "type": "camunda:outputParameter",
+              "source": "${S(response)}",
+              "scriptFormat": "freemarker"
+            }
+          }
+        ]
+      }
+    }
   },
   {
     "name": "AsyncAwesomeTask",
@@ -391,5 +446,34 @@
       "listener-field-type": false,
       "listener-field-value": false
     }
+  },
+  {
+    "name": "Field Injections",
+    "id": "com.camunda.example.FieldInjections",
+    "appliesTo": [
+      "bpmn:ServiceTask"
+    ],
+    "properties": [
+      {
+        "label": "Field Injection String",
+        "type": "String",
+        "value": "My Field Injection Value",
+        "binding": {
+          "type": "camunda:field",
+          "name": "fieldInjectionString",
+          "expression": false
+        }
+      },
+      {
+        "label": "Field Injection Expression",
+        "type": "String",
+        "value": "${fieldInjectionExpression}",
+        "binding": {
+          "type": "camunda:field",
+          "name": "fieldInjectionExpression",
+          "expression": true
+        }
+      }
+    ]
   }
 ]
